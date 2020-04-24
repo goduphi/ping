@@ -1,8 +1,14 @@
 /*
 	Author: Sarker Nadir Afridi Azmi
 	
+	Compile using: gcc ./ping.c -o ping -g
+	
+	Usage: sudo ./ping [-t ttl] destination
+	
 	Resources used:
 	* Primary resource: https://opensourceforu.com/2015/03/a-guide-to-using-raw-sockets/
+	* TCP/IP Sockets in C - Practical Guide for Programmers - 2nd Edition
+							Author: Michael J. Donaho, Kenneth L. Calvert
 	* https://stackoverflow.com/questions/13543554/how-to-receive-icmp-request-in-c-with-raw-sockets
 	* http://courses.cs.vt.edu/cs4254/fall04/slides/raw_6.pdf
 	* https://www.geeksforgeeks.org/ping-in-c/
@@ -12,8 +18,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
-#include <netinet/ip_icmp.h>					// Includes iphdr & icmphdr
-#include <arpa/inet.h>							// Includes inet_pton()
+#include <netinet/ip_icmp.h> // Includes iphdr & icmphdr
+#include <arpa/inet.h>		 // Includes inet_pton()
 #include <unistd.h>
 #include <string.h>
 #include <netdb.h>
@@ -26,6 +32,7 @@
 #define PORT_NO 0
 #define DELAY_BETWEEN_ECHO_REQUESTS 1000000
 #define RECEIVE_TIME_OUT 1
+#define DEFAULT_TTL_VAL 64
 
 static int PING_STOP = 1;
 
@@ -100,9 +107,25 @@ void ResolveHost(const char *host, char *dest)
 }
 
 // Parses the command line arguments
-void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr)
+void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr, int *ttlVal)
 {
-	if(argc < 2 || argc > 3)
+	int cmdIdx = 1;
+	if(argc == 4)
+	{
+		char flag[3];
+		strncpy(flag, argv[1], 3);
+		if(strcmp(flag, "-t") == 0)
+		{
+			*ttlVal = atoi(argv[2]);
+			cmdIdx = 3;
+		}
+		else
+		{
+			printf("Invalid flag. Please follow the format: %s -t ttl <IP Address/Host Name>\n", argv[0]);
+			exit(EXIT_FAILURE);
+		}
+	}
+	else if(argc < 2 || argc > 3)
 	{
 		printf("Please follow the format: %s <IP Address/Host Name>\n", argv[0]);
 		exit(EXIT_FAILURE);
@@ -118,7 +141,7 @@ void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr)
 	}
 	
 	ResolveHost(HostName, srcAddr);
-	ResolveHost(argv[1], destAddr);
+	ResolveHost(argv[cmdIdx], destAddr);
 }
 
 // This code has been directly taken from Geeksforgeeks
@@ -164,8 +187,9 @@ int main(int argc, char *argv[])
 	bzero(&DestIp, sizeof(DestIp));
 	char SrcIp[IP_ADDR_LEN];
 	bzero(&SrcIp, sizeof(SrcIp));
+	int TTLVal = DEFAULT_TTL_VAL;
 	
-	ParseCmdArgs(argc, argv, DestIp, SrcIp);
+	ParseCmdArgs(argc, argv, DestIp, SrcIp, &TTLVal);
 	
 	// Packet to be sent over the network
 	Packet packet;
@@ -178,7 +202,7 @@ int main(int argc, char *argv[])
 	// Set packet parameters
 	// Record time values
 	int seq = 0;
-	int TTLVal = 64;
+	
 	struct timespec PacketSentTime, PacketReceivedTime, PingStartTime, PingEndTime;
 	int RecvdMessageCount = 0;
 	
@@ -251,13 +275,17 @@ int main(int argc, char *argv[])
 			MsgSent = 0;
 		}
 		
+		// Flag to check if packet was received or not
+		int RevcFail = 0;
 		struct sockaddr_in ReturnAddress;
 		int addrLen = sizeof(ReturnAddress);
+		
 		if(recvfrom(sock, &EchoPacket, sizeof(EchoPacket), 0, (struct sockaddr *)&ReturnAddress, &addrLen) <= 0)
 		{
-			printf("Request timed out.\n");
+			RevcFail = 1;
+			perror("Failed to receive the packet");
 		}
-		else
+		else if(RevcFail != 1)
 		{
 			// Time when packet is received
 			clock_gettime(CLOCK_MONOTONIC, &PacketReceivedTime);
@@ -268,11 +296,23 @@ int main(int argc, char *argv[])
 			// Only send the message if there it has been sucessfully received
 			if(MsgSent)
 			{
-				printf("%ld bytes from %s: icmp_seq=%d, initial ttl = %d, received packet ttl=%d, rtt=%0.1Lf ms\n",
-													sizeof(EchoPacket), DestIp, seq, TTLVal, EchoPacket.ip.ttl, RTT);
-				
-				// Increment the message count
-				RecvdMessageCount++;
+				if(EchoPacket.icmp.type == ICMP_TIME_EXCEEDED && EchoPacket.icmp.code == ICMP_EXC_TTL)
+				{
+					char RevdAddrBuffer[IP_ADDR_LEN];
+					printf("From %s icmp_seq=%d Time to live exceeded\n", inet_ntop (AF_INET, &EchoPacket.ip.saddr, RevdAddrBuffer, IP_ADDR_LEN), seq);
+				}
+				else if(EchoPacket.icmp.type == ICMP_DEST_UNREACH && EchoPacket.icmp.code == ICMP_HOST_UNREACH)
+				{
+					char RevdAddrBuffer[IP_ADDR_LEN];
+					printf("From %s icmp_seq=%d Destination Host Unreachable\n", inet_ntop (AF_INET, &EchoPacket.ip.saddr, RevdAddrBuffer, IP_ADDR_LEN), seq);
+				}
+				else
+				{
+					printf("%ld bytes from %s: icmp_seq=%d, supplied ttl value = %d, received packet ttl=%d, rtt=%0.1Lf ms\n",
+														sizeof(EchoPacket), DestIp, seq, TTLVal, EchoPacket.ip.ttl, RTT);
+					// Increment the message count
+					RecvdMessageCount++;
+				}
 			}
 		}
 		
@@ -296,7 +336,7 @@ int main(int argc, char *argv[])
 	double TotalPingTimeNSec = (PingEndTime.tv_nsec - PingStartTime.tv_nsec) / 1000000;
 	long double TotalPingTime = ((PingEndTime.tv_sec - PingStartTime.tv_sec) * 1000) + TotalPingTimeNSec;
 	printf("\n--- %s ping statistics ---\n", DestIp);
-	printf("%d packets transmitted, %d packets received, %.1f%% loss, time %0.0Lf ms\n",
+	printf("%d packets transmitted, %d packets received, %.1f%% packet loss, time %0.0Lf ms\n",
 			seq, RecvdMessageCount, ((double)(seq - RecvdMessageCount)/(double)seq) * 100, TotalPingTime);
 	
 	return EXIT_SUCCESS;
