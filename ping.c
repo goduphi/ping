@@ -65,9 +65,12 @@ void ConstructPacket(Packet * packet, int * sequenceValue)
 	packet->icmp.un.echo.id = getpid();
 }
 
-// This function is responsible for doing a host lookup
 // This piece of code was very helpful:
 // https://gist.github.com/jirihnidek/bf7a2363e480491da72301b228b35d5d
+
+// This function is responsible for doing a host lookup
+// Param 1: String representing the host
+// Param 2: Buffer to store the returned address
 void ResolveHost(const char *host, char *dest)
 {
 	struct addrinfo hints, *res = NULL;
@@ -82,6 +85,7 @@ void ResolveHost(const char *host, char *dest)
 	if(getaddrinfo(host, NULL, &hints, &res) != 0)
 	{
 		perror("getaddrinfo failed");
+		freeaddrinfo(res);
 		exit(1);
 	}
 	
@@ -98,6 +102,7 @@ void ResolveHost(const char *host, char *dest)
 			break;
 		}
 		inet_ntop (res->ai_family, ptr, dest, IP_ADDR_LEN);
+		freeaddrinfo(res);
 	}
 	else
 	{
@@ -107,9 +112,16 @@ void ResolveHost(const char *host, char *dest)
 }
 
 // Parses the command line arguments
+// Param 1: argc
+// Param 2: argv
+// Param 3: Destination ip buffer
+// Param 4: Source ip buffer - This was included so that if I wanted to use a custom ip header, I can easily do so
+// Param 5: Pointer to a ttl value
 void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr, int *ttlVal)
 {
 	int cmdIdx = 1;
+	
+	// Check to see if the -t flag has been added or not
 	if(argc == 4)
 	{
 		char flag[3];
@@ -125,12 +137,13 @@ void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr, int *tt
 			exit(EXIT_FAILURE);
 		}
 	}
-	else if(argc < 2 || argc > 3)
+	else if(argc < 2 || argc > 2)
 	{
 		printf("Please follow the format: %s <IP Address/Host Name>\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 	
+	// Get the host name
 	char HostName[255];
 	int HostNameCheck = gethostname(HostName, sizeof(HostName));
 	
@@ -142,10 +155,14 @@ void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr, int *tt
 	
 	ResolveHost(HostName, srcAddr);
 	ResolveHost(argv[cmdIdx], destAddr);
+	printf("PINGING %s (%s) %ld(%ld) bytes of data.\n", argv[cmdIdx], destAddr,
+			PACKET_SIZE - sizeof(struct icmphdr) - sizeof(struct iphdr), sizeof(Packet));
 }
 
 // This code has been directly taken from Geeksforgeeks
-// Calculating the Check Sum
+// This function calculates the checksum
+// Param 1: Buffer containing data for which the check sum is to be found
+// Param 2: Length of the buffer
 unsigned short checksum(unsigned short *buf, int len) 
 {
     unsigned int sum = 0; 
@@ -162,6 +179,8 @@ unsigned short checksum(unsigned short *buf, int len)
 }
 
 // Function to fill the data with random data
+// Param 1: Data buffer
+// Param 2: Length of data buffer
 void FillData(char *data, int len)
 {
 	// Data inside of packet
@@ -175,6 +194,7 @@ void FillData(char *data, int len)
 }
 
 // Stops pinging
+// Param: Unused
 void StopPing(int temp)
 {
 	PING_STOP = 0;
@@ -185,6 +205,7 @@ int main(int argc, char *argv[])
 	// Buffers to hold the destination and source ip's
 	char DestIp[IP_ADDR_LEN];
 	bzero(&DestIp, sizeof(DestIp));
+	// The source IP has only been included for future expansion
 	char SrcIp[IP_ADDR_LEN];
 	bzero(&SrcIp, sizeof(SrcIp));
 	int TTLVal = DEFAULT_TTL_VAL;
@@ -289,6 +310,7 @@ int main(int argc, char *argv[])
 		{
 			// Time when packet is received
 			clock_gettime(CLOCK_MONOTONIC, &PacketReceivedTime);
+			
 			// Convert the time to milliseconds
 			double TimeElapsed = (double)(PacketReceivedTime.tv_nsec - PacketSentTime.tv_nsec)/1000000;
 			long double RTT = ((PacketReceivedTime.tv_sec - PacketSentTime.tv_sec) * 1000) + TimeElapsed;
