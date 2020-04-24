@@ -19,11 +19,13 @@
 #include <netdb.h>
 #include <time.h>
 #include <signal.h>
+#include <stdbool.h>
 
 #define PACKET_SIZE 64
 #define IP_ADDR_LEN 15
 #define PORT_NO 0
 #define DELAY_BETWEEN_ECHO_REQUESTS 1000000
+#define RECEIVE_TIME_OUT 1
 
 static int PING_STOP = 1;
 
@@ -56,6 +58,47 @@ void ConstructPacket(Packet * packet, int * sequenceValue)
 	packet->icmp.un.echo.id = getpid();
 }
 
+// This function is responsible for doing a host lookup
+// This piece of code was very helpful:
+// https://gist.github.com/jirihnidek/bf7a2363e480491da72301b228b35d5d
+void ResolveHost(const char *host, char *dest)
+{
+	struct addrinfo hints, *res = NULL;
+	void *ptr = NULL;
+	memset(&hints, 0, sizeof (hints));
+	
+	// Allow any address family
+	hints.ai_family = PF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags |= AI_CANONNAME;
+	
+	if(getaddrinfo(host, NULL, &hints, &res) != 0)
+	{
+		perror("getaddrinfo failed");
+		exit(1);
+	}
+	
+	if(res)
+	{
+		switch(res->ai_family)
+		{
+			case AF_INET:
+				ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
+			break;
+			case AF_INET6:
+				ptr = &((struct sockaddr_in6 *) res->ai_addr)->sin6_addr;
+			break;
+		}
+		inet_ntop (res->ai_family, ptr, dest, IP_ADDR_LEN);
+	}
+	else
+	{
+		printf("No result found for given domain/ip.\n");
+		exit(1);
+	}
+}
+
+// Parses the command line arguments
 void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr)
 {
 	if(argc < 2 || argc > 3)
@@ -73,23 +116,8 @@ void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr)
 		exit(EXIT_FAILURE);
 	}
 	
-	struct hostent *LocalHostEntry = gethostbyname(HostName);
-	struct hostent *RemoteHostEntry = gethostbyname(argv[1]);
-	
-	if(LocalHostEntry == NULL)
-	{
-		perror("gethostbyname() failed");
-		exit(EXIT_FAILURE);
-	}
-	
-	strncpy(srcAddr, inet_ntoa(*((struct in_addr *)LocalHostEntry->h_addr_list[0])), IP_ADDR_LEN);
-	strncpy(destAddr, inet_ntoa(*(struct in_addr *)RemoteHostEntry->h_addr), IP_ADDR_LEN);
-	
-	if(destAddr == NULL)
-	{
-		printf("Invalid domain/ip address. Exiting...\n");
-		exit(1);
-	}
+	ResolveHost(HostName, srcAddr);
+	ResolveHost(argv[1], destAddr);
 }
 
 // This code has been directly taken from Geeksforgeeks
@@ -132,7 +160,9 @@ int main(int argc, char *argv[])
 {
 	// Buffers to hold the destination and source ip's
 	char DestIp[IP_ADDR_LEN];
+	bzero(&DestIp, sizeof(DestIp));
 	char SrcIp[IP_ADDR_LEN];
+	bzero(&SrcIp, sizeof(SrcIp));
 	
 	ParseCmdArgs(argc, argv, DestIp, SrcIp);
 	
@@ -166,6 +196,18 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	
+	// Set timeout value for socket
+	struct timeval TimeOut;
+	bzero(&TimeOut, sizeof(TimeOut));
+	TimeOut.tv_sec = RECEIVE_TIME_OUT;
+	TimeOut.tv_usec = 0;
+	
+	if(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&TimeOut, sizeof(TimeOut)) == -1)
+	{
+		perror("Failed to set time-out value. setsockopt() failed");
+		exit(1);
+	}
+	
 	struct sockaddr_in ConnectingAddress;
 	bzero(&ConnectingAddress, sizeof(ConnectingAddress));
 	
@@ -188,6 +230,7 @@ int main(int argc, char *argv[])
 	// Catch Ctrl-C
 	signal(SIGINT, StopPing);
 	
+	// Get ping start time
 	clock_gettime(CLOCK_MONOTONIC, &PingStartTime);
 	// Ping
 	while(PING_STOP)
@@ -197,11 +240,14 @@ int main(int argc, char *argv[])
 		FillData(packet.data, sizeof(packet.data));
 		packet.icmp.checksum = checksum((unsigned short *)&packet, sizeof(packet));
 		
+		int MsgSent = 1;
+		
 		// Time when packet is sent
 		clock_gettime(CLOCK_MONOTONIC, &PacketSentTime);
 		if(sendto(sock, &packet, sizeof(Packet), 0, (struct sockaddr *)&ConnectingAddress, sizeof(ConnectingAddress)) <= 0)
 		{
 			printf("Failed to send the packet.\n");
+			MsgSent = 0;
 		}
 		
 		struct sockaddr_in ReturnAddress;
@@ -215,12 +261,18 @@ int main(int argc, char *argv[])
 			// Time when packet is received
 			clock_gettime(CLOCK_MONOTONIC, &PacketReceivedTime);
 			// Convert the time to milliseconds
-			double TimeElapsed = (PacketReceivedTime.tv_nsec - PacketSentTime.tv_nsec)/1000000;
+			double TimeElapsed = (double)(PacketReceivedTime.tv_nsec - PacketSentTime.tv_nsec)/1000000;
+			long double RTT = ((PacketReceivedTime.tv_sec - PacketSentTime.tv_sec) * 1000) + TimeElapsed;
 			
-			printf("%ld bytes from %s: icmp_seq=%d ttl=%d time=%0.1f ms\n", sizeof(EchoPacket), DestIp, seq, EchoPacket.ip.ttl, TimeElapsed);
-			
-			// Increment the message count
-			RecvdMessageCount++;
+			// Only send the message if there it has been sucessfully received
+			if(MsgSent)
+			{
+				printf("%ld bytes from %s: icmp_seq=%d, initial ttl = %d, received packet ttl=%d, rtt=%0.1Lf ms\n",
+													sizeof(EchoPacket), DestIp, seq, TTLVal, EchoPacket.ip.ttl, RTT);
+				
+				// Increment the message count
+				RecvdMessageCount++;
+			}
 		}
 		
 		/*
@@ -240,10 +292,11 @@ int main(int argc, char *argv[])
 	
 	clock_gettime(CLOCK_MONOTONIC, &PingEndTime);
 	
-	double TotalPingTime = (PingEndTime.tv_nsec - PingStartTime.tv_nsec) / 1000000;
+	double TotalPingTimeNSec = (PingEndTime.tv_nsec - PingStartTime.tv_nsec) / 1000000;
+	long double TotalPingTime = ((PingEndTime.tv_sec - PingStartTime.tv_sec) * 1000) + TotalPingTimeNSec;
 	printf("\n--- %s ping statistics ---\n", DestIp);
-	printf("%d packets transmitted, %d packets received, %d%% loss, time %f ms\n",
-			seq, RecvdMessageCount, ((seq - RecvdMessageCount)/seq) * 100, TotalPingTime);
+	printf("%d packets transmitted, %d packets received, %.1f%% loss, time %0.0Lf ms\n",
+			seq, RecvdMessageCount, ((double)(seq - RecvdMessageCount)/(double)seq) * 100, TotalPingTime);
 	
 	return EXIT_SUCCESS;
 }
