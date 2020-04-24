@@ -12,8 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
-#include <netinet/ip_icmp.h>				// Includes iphdr & icmphdr
-#include <arpa/inet.h>						// Includes inet_pton()
+#include <netinet/ip_icmp.h>					// Includes iphdr & icmphdr
+#include <arpa/inet.h>							// Includes inet_pton()
 #include <unistd.h>
 #include <string.h>
 #include <netdb.h>
@@ -22,7 +22,7 @@
 #include <stdbool.h>
 
 #define PACKET_SIZE 64
-#define IP_ADDR_LEN 15
+#define IP_ADDR_LEN 100
 #define PORT_NO 0
 #define DELAY_BETWEEN_ECHO_REQUESTS 1000000
 #define RECEIVE_TIME_OUT 1
@@ -67,9 +67,9 @@ void ResolveHost(const char *host, char *dest)
 	void *ptr = NULL;
 	memset(&hints, 0, sizeof (hints));
 	
-	// Allow any address family
-	hints.ai_family = PF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
+	// *** Allow any address family
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_RAW;
 	hints.ai_flags |= AI_CANONNAME;
 	
 	if(getaddrinfo(host, NULL, &hints, &res) != 0)
@@ -85,6 +85,7 @@ void ResolveHost(const char *host, char *dest)
 			case AF_INET:
 				ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
 			break;
+			// For future expansion to AF_INET6
 			case AF_INET6:
 				ptr = &((struct sockaddr_in6 *) res->ai_addr)->sin6_addr;
 			break;
@@ -254,7 +255,7 @@ int main(int argc, char *argv[])
 		int addrLen = sizeof(ReturnAddress);
 		if(recvfrom(sock, &EchoPacket, sizeof(EchoPacket), 0, (struct sockaddr *)&ReturnAddress, &addrLen) <= 0)
 		{
-			printf("Failed to receive the packet.\n");
+			printf("Request timed out.\n");
 		}
 		else
 		{
