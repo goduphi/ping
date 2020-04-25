@@ -1,6 +1,8 @@
 /*
 	Author: Sarker Nadir Afridi Azmi
 	
+	Compile the code on Linux using gcc
+	
 	Compile using: gcc ./ping.c -o ping -g
 	
 	Usage: sudo ./ping [-t ttl] destination
@@ -156,7 +158,7 @@ void ParseCmdArgs(int argc, char *argv[], char *destAddr, char *srcAddr, int *tt
 	ResolveHost(HostName, srcAddr);
 	ResolveHost(argv[cmdIdx], destAddr);
 	printf("PINGING %s (%s) %ld(%ld) bytes of data.\n", argv[cmdIdx], destAddr,
-			PACKET_SIZE - sizeof(struct icmphdr) - sizeof(struct iphdr), sizeof(Packet));
+			PACKET_SIZE - sizeof(struct icmphdr), sizeof(Packet));
 }
 
 // This code has been directly taken from Geeksforgeeks
