@@ -1,5 +1,4 @@
 # Ping
-## Author: Sarker Nadir Afridi Azmi
 ### This program was written as a submission for an internship position for systems at Cloudflare.  
 
 Compile on Linux using gcc  
