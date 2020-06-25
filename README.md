@@ -1,5 +1,5 @@
 # Ping
-### This program was written as a submission for an internship position for systems at Cloudflare.  
+### This program was written as a submission for an internship position at Cloudflare.  
 
 Compile on Linux using gcc  
 Compilation instruction: gcc ./ping.c -o ping -g  
