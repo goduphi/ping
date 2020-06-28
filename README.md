@@ -11,12 +11,12 @@ Author: Michael J. Donaho, Kenneth L. Calvert
 - https://www.geeksforgeeks.org/ping-in-c/
   
 ### Compilation instructions:
-```gcc ./ping.c -o ping -g```  
+- Ping Utility: ```gcc ./ping.c -o ping -g```  
 
 Note: This program currently only supports IPv4 addresses. 
 
 ### Usage
-```sudo ./ping [-t ttl] destination```  
+- Ping Utility ```sudo ./ping [-t ttl] destination```  
 
 Note: The program needs to be run using sudo as it makes use of raw sockets.
 
